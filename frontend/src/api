@@ -1,0 +1,252 @@
+// frontend/src/api.ts
+
+export interface Stop {
+  id: number;
+  name: string;
+  image_url: string | null;
+  wheelchair_accessible: boolean;
+  has_shelter: boolean;
+  has_ticket_machine: boolean;
+}
+
+/*
+ * Data posílaná při POST a PUT.
+ *
+ * ID zde není, protože ho generuje databáze.
+ * PUT posílá vždy celý tento objekt.
+ */
+export interface StopInput {
+  name: string;
+  image_url?: string | null;
+  wheelchair_accessible: boolean;
+  has_shelter: boolean;
+  has_ticket_machine: boolean;
+}
+
+export interface HealthResponse {
+  status: string;
+}
+
+export interface TeamResponse {
+  tym: string;
+  clenove: string[];
+}
+
+type ApiErrorBody = {
+  message?: string;
+  error?: string;
+  summary?: string;
+};
+
+/*
+ * Na Tour de App se použije /api.
+ *
+ * Pro lokální vývoj můžeš ve frontend/.env.local nastavit:
+ *
+ * VITE_API_URL=http://localhost:3001/api
+ */
+const API_URL = (
+  import.meta.env.VITE_API_URL ?? "/api"
+).replace(/\/$/, "");
+
+/*
+ * Přečte chybovou odpověď API.
+ *
+ * Funguje i v případě, kdy server nevrátí JSON.
+ */
+async function createApiError(
+  response: Response,
+): Promise<Error> {
+  let message = `Request failed with status ${response.status}.`;
+
+  try {
+    const contentType =
+      response.headers.get("content-type") ?? "";
+
+    if (contentType.includes("application/json")) {
+      const body = (await response.json()) as ApiErrorBody;
+
+      message =
+        body.message ??
+        body.error ??
+        body.summary ??
+        message;
+    } else {
+      const text = await response.text();
+
+      if (text.trim()) {
+        message = text;
+      }
+    }
+  } catch {
+    // Pokud nelze odpověď přečíst, použije se výchozí zpráva.
+  }
+
+  return new Error(message);
+}
+
+/*
+ * Společná pomocná funkce pro požadavky vracející JSON.
+ */
+async function requestJson<T>(
+  path: string,
+  options?: RequestInit,
+): Promise<T> {
+  const response = await fetch(`${API_URL}${path}`, {
+    ...options,
+    headers: {
+      Accept: "application/json",
+      ...options?.headers,
+    },
+  });
+
+  if (!response.ok) {
+    throw await createApiError(response);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+/*
+ * GET /api/v1/health
+ */
+export async function getHealth(): Promise<HealthResponse> {
+  return requestJson<HealthResponse>("/v1/health");
+}
+
+/*
+ * GET /api/v1/tym
+ */
+export async function getTeam(): Promise<TeamResponse> {
+  return requestJson<TeamResponse>("/v1/tym");
+}
+
+/*
+ * GET /api/v1/stops
+ *
+ * Vrátí seznam všech zastávek.
+ */
+export async function getStops(): Promise<Stop[]> {
+  return requestJson<Stop[]>("/v1/stops");
+}
+
+/*
+ * GET /api/v1/stops/:id
+ *
+ * Vrátí jednu zastávku.
+ */
+export async function getStop(id: number): Promise<Stop> {
+  validateId(id);
+
+  return requestJson<Stop>(`/v1/stops/${id}`);
+}
+
+/*
+ * POST /api/v1/stops
+ *
+ * Backend vrací 201 Created a vytvořenou zastávku.
+ */
+export async function createStop(
+  input: StopInput,
+): Promise<Stop> {
+  return requestJson<Stop>("/v1/stops", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(normalizeStopInput(input)),
+  });
+}
+
+/*
+ * PUT /api/v1/stops/:id
+ *
+ * PUT posílá kompletní novou podobu zastávky.
+ * Nejde o částečnou aktualizaci.
+ */
+export async function updateStop(
+  id: number,
+  input: StopInput,
+): Promise<Stop> {
+  validateId(id);
+
+  return requestJson<Stop>(`/v1/stops/${id}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(normalizeStopInput(input)),
+  });
+}
+
+/*
+ * DELETE /api/v1/stops/:id
+ *
+ * Backend vrací 204 No Content.
+ * Proto zde nevoláme response.json().
+ */
+export async function deleteStop(
+  id: number,
+): Promise<void> {
+  validateId(id);
+
+  const response = await fetch(
+    `${API_URL}/v1/stops/${id}`,
+    {
+      method: "DELETE",
+      headers: {
+        Accept: "application/json",
+      },
+    },
+  );
+
+  if (!response.ok) {
+    throw await createApiError(response);
+  }
+
+  if (response.status !== 204) {
+    throw new Error(
+      `Expected status 204 after deletion, received ${response.status}.`,
+    );
+  }
+}
+
+/*
+ * Základní kontrola ID ještě před odesláním požadavku.
+ */
+function validateId(id: number): void {
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error(
+      "Stop ID must be a positive integer.",
+    );
+  }
+}
+
+/*
+ * Normalizuje vstup před odesláním.
+ *
+ * image_url:
+ * - prázdný text se převede na null,
+ * - chybějící hodnota se převede na null,
+ * - URL s obsahem zůstane zachovaná.
+ */
+function normalizeStopInput(
+  input: StopInput,
+): Required<StopInput> {
+  const name = input.name.trim();
+
+  if (!name) {
+    throw new Error("Stop name is required.");
+  }
+
+  const rawImageUrl = input.image_url?.trim();
+
+  return {
+    name,
+    image_url: rawImageUrl || null,
+    wheelchair_accessible:
+      input.wheelchair_accessible,
+    has_shelter: input.has_shelter,
+    has_ticket_machine: input.has_ticket_machine,
+  };
+}
